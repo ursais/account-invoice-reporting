@@ -22,14 +22,36 @@ class AccountMove(models.Model):
             ),
         )
 
+    def _get_signed_quantity_done(self, invoice_line, move, sign):
+        """Hook method. Usage example:
+        account_invoice_report_grouped_by_picking_sale_mrp module
+        """
+        qty = 0
+        if move.location_id.usage == "customer":
+            qty = -move.quantity_done * sign
+        elif move.location_dest_id.usage == "customer":
+            qty = move.quantity_done * sign
+        return qty
+
     def lines_grouped_by_picking(self):
         """This prepares a data structure for printing the invoice report
         grouped by pickings."""
         self.ensure_one()
         picking_dict = OrderedDict()
         lines_dict = OrderedDict()
-        sign = -1.0 if self.move_type == "out_refund" else 1.0
-        # Let's get first a correspondence between pickings and sales order
+        # Not change sign if the credit note has been created from reverse move option
+        # and it has the same pickings related than the reversed invoice instead of sale
+        # order invoicing process after picking reverse transfer
+        sign = (
+            -1.0
+            if self.move_type == "out_refund"
+            and (
+                not self.reversed_entry_id
+                or self.reversed_entry_id.picking_ids != self.picking_ids
+            )
+            else 1.0
+        )
+        # Let's get first a correspondance between pickings and sales order
         so_dict = {x.sale_id: x for x in self.picking_ids if x.sale_id}
         # Now group by picking by direct link or via same SO as picking's one
         for line in self.invoice_line_ids.filtered(lambda x: not x.display_type):
@@ -38,12 +60,7 @@ class AccountMove(models.Model):
             for move in line.move_line_ids:
                 key = (move.picking_id, line)
                 picking_dict.setdefault(key, 0)
-                qty = 0
-                if move.location_id.usage == "customer":
-                    qty = -move.quantity_done * sign
-                    has_returned_qty = True
-                elif move.location_dest_id.usage == "customer":
-                    qty = move.quantity_done * sign
+                qty = self._get_signed_quantity_done(line, move, sign)
                 picking_dict[key] += qty
                 remaining_qty -= qty
             if not line.move_line_ids and line.sale_line_ids:
